@@ -4,6 +4,7 @@ use std::fmt;
 use std::mem;
 use std::os::raw::*;
 use std::path::PathBuf;
+use std::time;
 
 use libloading::{Library, Symbol};
 use libloading::os::windows::Symbol as RawSymbol;
@@ -19,6 +20,7 @@ type LPCTSTR = *const c_char;
 type LPVOID = *mut c_void;
 type EtkConnectFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, c_int, c_int, c_int, c_int) -> BOOL;
 type EtkIsConnectedFunc = unsafe extern "stdcall" fn() -> BOOL;
+type EtkDisconnectFunc = unsafe extern "stdcall" fn() -> BOOL;
 type EtkLoginFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, LPCSTR, c_int, BOOL) -> BOOL;
 type EtkLogoutFunc = unsafe extern "stdcall" fn(HWND) -> BOOL;
 type EtkRequestFunc = unsafe extern "stdcall" fn(HWND, LPCTSTR, LPVOID, c_int, BOOL, LPCTSTR, c_int) -> c_int;
@@ -40,7 +42,7 @@ type EtkReleaseRequestDataFunc = unsafe extern "stdcall" fn(c_int);
 type EtkReleaseMessageDataFunc = unsafe extern "stdcall" fn(LPARAM);
 type EtkDecompressFunc = unsafe extern "stdcall" fn(LPCTSTR, LPCTSTR, c_int) -> c_int;
 
-fn bool_c2rust(값: BOOL) -> bool {
+fn bool_rust(값: BOOL) -> bool {
     if 값 == 0 {
         false
     } else {
@@ -77,6 +79,7 @@ pub fn 초기화() -> XingDllWrapper {
 
     let vConnect: Symbol<EtkConnectFunc> = unsafe { dll.get(b"ETK_Connect").unwrap() };
     let vIsConnected: Symbol<EtkIsConnectedFunc> = unsafe { dll.get(b"ETK_IsConnected").unwrap() };
+    let vDisconnect: Symbol<EtkDisconnectFunc> = unsafe { dll.get(b"ETK_Disconnect").unwrap() };
     let vLogin: Symbol<EtkLoginFunc> = unsafe { dll.get(b"ETK_Login").unwrap() };
     let vLogout: Symbol<EtkLogoutFunc> = unsafe { dll.get(b"ETK_Logout").unwrap() };
     let vRequest: Symbol<EtkRequestFunc> = unsafe { dll.get(b"ETK_Request").unwrap() };
@@ -101,6 +104,7 @@ pub fn 초기화() -> XingDllWrapper {
     XingDllWrapper {
         etkConnect: unsafe { vConnect.into_raw() },
         etkIsConnected: unsafe { vIsConnected.into_raw() },
+        etkDisconnect: unsafe { vDisconnect.into_raw() },
         etkLogin: unsafe { vLogin.into_raw() },
         etkLogout: unsafe { vLogout.into_raw() },
         etkRequest: unsafe { vRequest.into_raw() },
@@ -129,6 +133,7 @@ pub fn 초기화() -> XingDllWrapper {
 pub struct XingDllWrapper {
     etkConnect: RawSymbol<EtkConnectFunc>,
     etkIsConnected: RawSymbol<EtkIsConnectedFunc>,
+    etkDisconnect: RawSymbol<EtkDisconnectFunc>,
     etkLogin: RawSymbol<EtkLoginFunc>,
     etkLogout: RawSymbol<EtkLogoutFunc>,
     etkRequest: RawSymbol<EtkRequestFunc>,
@@ -164,8 +169,7 @@ impl XingDllWrapper {
             _ => panic!("예상하지 못한 서버 구분 : {}", 서버),
         }
 
-
-        bool_c2rust(unsafe {
+        bool_rust(unsafe {
             (self.etkConnect)(
                 self.hWnd,
                 CString::new(서버_이름).unwrap().as_ptr(),
@@ -174,24 +178,45 @@ impl XingDllWrapper {
         })
     }
 
-    pub fn IsConnected(&self) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkIsConnectedFunc> = unsafe { self.dll.get(ETK_IsConnected).unwrap() };
+    pub fn IsConnected(&self) -> bool {
+        bool_rust(unsafe { (self.etkIsConnected)() })
     }
 
-    pub fn Login(&self, hwnd: HWND, str1: LPCSTR, str2: LPCSTR, str3: LPCSTR, i: c_int, bool: BOOL) {// -> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkLoginFunc> = unsafe { self.dll.get(ETK_Login).unwrap() };
+    pub fn Disconnect(&self) -> bool {
+        bool_rust(unsafe { (self.etkDisconnect)() })
     }
 
-    pub fn Logout(&self, hwnd: HWND) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkLogoutFunc> = unsafe { self.dll.get(ETK_Logout).unwrap() };
+    pub fn Login<T: Into<Vec<u8>>>(&self, hwnd: HWND, strId: T, strPwd: T, strCertPwd: T) -> bool {
+        let id = CString::new(strId).unwrap().as_ptr();
+        let pwd = CString::new(strPwd).unwrap().as_ptr();
+        let certPwd = CString::new(strCertPwd).unwrap().as_ptr();
+
+        bool_rust(unsafe {
+            (self.etkLogin)(
+                self.hWnd,
+                id,
+                pwd,
+                certPwd,
+                0, 0)
+        })
     }
 
-    pub fn Request(&self, hwnd: HWND, str1: LPCTSTR, void: LPVOID, i1: c_int, bool: BOOL, str2: LPCTSTR, i2: c_int) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkRequestFunc> = unsafe { self.dll.get(ETK_Request).unwrap() };
+    pub fn Logout(&self) -> bool {
+        bool_rust(unsafe { (self.etkLogout)(self.hWnd) })
+    }
+
+    pub fn Request<T: Into<Vec<u8>>>(&self, TR코드: T, c데이터: Box<[u8]>, 길이: int,
+                                     연속_조회_여부: bool, 연속키: T, 타임아웃: time::Duration) -> int {
+        bool_rust(unsafe {
+            (self.etkRequest)(
+                self.hWnd,
+                CString::new(TR코드).unwrap().as_ptr(),
+                c데이터.as_ptr(),
+                길이 as c_int,
+                if 연속_조회_여부 { 1 } else { 0 },
+                CString::new(연속키).unwrap().as_ptr(),
+                타임아웃.as_secs() as c_int)
+        })
     }
 
     pub fn AdviseRealData(&self, hwnd: HWND, str1: LPCTSTR, str2: LPCTSTR, i: c_int) {//-> BOOL {

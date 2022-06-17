@@ -1,0 +1,25 @@
+[package]
+name = "xing-grpc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build]
+target = "i686-pc-windows-msvc"
+
+[dependencies]
+libloading = "0.7"
+
+[dependencies.windows-sys]
+version = "0.36.1"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+
+
+

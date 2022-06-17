@@ -1,0 +1,2 @@
+- Xing API DLL 호출
+- gRPC 서비스 정의

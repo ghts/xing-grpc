@@ -2,9 +2,11 @@ use std::env;
 use std::ffi::CString;
 use std::fmt;
 use std::mem;
+use std::mem::MaybeUninit;
 use std::os::raw::*;
 use std::path::PathBuf;
 use std::string;
+use std::sync;
 use std::time;
 
 use encoding::{DecoderTrap, Encoding};
@@ -17,40 +19,31 @@ use windows_sys::Win32::UI::WindowsAndMessaging::WM_USER;
 use crate::msg_window;
 use crate::type_c;
 
-
 type LPSTR = *mut c_char;
 type LPCSTR = *const c_char;
-type EtkConnectFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, c_int, c_int, c_int, c_int) -> BOOL;
-type EtkIsConnectedFunc = unsafe extern "stdcall" fn() -> BOOL;
-type EtkDisconnectFunc = unsafe extern "stdcall" fn() -> BOOL;
-type EtkLoginFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, LPCSTR, c_int, BOOL) -> BOOL;
-type EtkLogoutFunc = unsafe extern "stdcall" fn(HWND) -> BOOL;
-type EtkRequestFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int, BOOL, LPCSTR, c_int) -> c_int;
-type EtkAdviseRealDataFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int) -> BOOL;
-type EtkUnadviseRealDataFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int) -> BOOL;
-type EtkUnadviseWindowFunc = unsafe extern "stdcall" fn(HWND) -> BOOL;
-type EtkGetAccountListCountFunc = unsafe extern "stdcall" fn() -> c_int;
-type EtkGetAccountListFunc = unsafe extern "stdcall" fn(c_int, LPSTR, c_int) -> BOOL;
-type EtkGetAccountNameFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
-type EtkGetAccountDetailNameFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
-type EtkGetAccountNickNameFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
-type EtkGetServerNameFunc = unsafe extern "stdcall" fn(LPSTR);
-type EtkGetLastErrorFunc = unsafe extern "stdcall" fn() -> c_int;
-type EtkGetErrorMessageFunc = unsafe extern "stdcall" fn(c_int, LPSTR, c_int) -> c_int;
-type EtkGetTRCountPerSecFunc = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
-type EtkGetTRCountLimitFunc = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
-type EtkGetTRCountRequestFunc = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
-type EtkReleaseRequestDataFunc = unsafe extern "stdcall" fn(c_int);
-type EtkReleaseMessageDataFunc = unsafe extern "stdcall" fn(LPARAM);
-type EtkDecompressFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> c_int;
-
-fn bool_rust(값: BOOL) -> bool {
-    if 값 == 0 {
-        false
-    } else {
-        true
-    }
-}
+type FnConnect = unsafe extern "stdcall" fn(HWND, LPCSTR, c_int, c_int, c_int, c_int) -> BOOL;
+type FnIsConnected = unsafe extern "stdcall" fn() -> BOOL;
+type FnDisconnect = unsafe extern "stdcall" fn() -> BOOL;
+type FnLogin = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, LPCSTR, c_int, BOOL) -> BOOL;
+type FnLogout = unsafe extern "stdcall" fn(HWND) -> BOOL;
+type FnRequest = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int, BOOL, LPCSTR, c_int) -> c_int;
+type FnAdviseRealData = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int) -> BOOL;
+type FnUnadviseRealData = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int) -> BOOL;
+type FnUnadviseWindow = unsafe extern "stdcall" fn(HWND) -> BOOL;
+type FnGetAccountListCount = unsafe extern "stdcall" fn() -> c_int;
+type FnGetAccountList = unsafe extern "stdcall" fn(c_int, LPSTR, c_int) -> BOOL;
+type FnGetAccountName = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
+type FnGetAccountDetailName = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
+type FnGetAccountNickName = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
+type FnGetServerName = unsafe extern "stdcall" fn(LPSTR);
+type FnGetLastError = unsafe extern "stdcall" fn() -> c_int;
+type FnGetErrorMessage = unsafe extern "stdcall" fn(c_int, LPSTR, c_int) -> c_int;
+type FnGetTRCountPerSec = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
+type FnGetTRCountLimit = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
+type FnGetTRCountRequest = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
+type FnReleaseRequestData = unsafe extern "stdcall" fn(c_int);
+type FnReleaseMessageData = unsafe extern "stdcall" fn(LPARAM);
+type FnDecompress = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> c_int;
 
 #[derive(Debug)]
 pub enum 서버_구분 {
@@ -68,7 +61,17 @@ impl fmt::Display for 서버_구분 {
     }
 }
 
-pub fn 초기화() -> XingDllWrapper {
+pub fn singleton() -> &'static XingDllWrapper {
+    static mut SINGLETON: MaybeUninit::<XingDllWrapper> = MaybeUninit::<XingDllWrapper>::uninit();
+    static ONCE: sync::Once = sync::Once::new();
+
+    unsafe {
+        ONCE.call_once(|| { SINGLETON.write(초기화()); });
+        SINGLETON.assume_init_ref()
+    }
+}
+
+fn 초기화() -> XingDllWrapper {
     let hWnd = msg_window::메시지_윈도우_생성();
 
     let 원래_디렉토리 = std::env::current_dir();
@@ -79,83 +82,61 @@ pub fn 초기화() -> XingDllWrapper {
     let dll = unsafe { Library::new(xing_api_파일).unwrap() };
     env::set_current_dir(원래_디렉토리.unwrap());
 
-    let vConnect: Symbol<EtkConnectFunc> = unsafe { dll.get(b"ETK_Connect").unwrap() };
-    let vIsConnected: Symbol<EtkIsConnectedFunc> = unsafe { dll.get(b"ETK_IsConnected").unwrap() };
-    let vDisconnect: Symbol<EtkDisconnectFunc> = unsafe { dll.get(b"ETK_Disconnect").unwrap() };
-    let vLogin: Symbol<EtkLoginFunc> = unsafe { dll.get(b"ETK_Login").unwrap() };
-    let vLogout: Symbol<EtkLogoutFunc> = unsafe { dll.get(b"ETK_Logout").unwrap() };
-    let vRequest: Symbol<EtkRequestFunc> = unsafe { dll.get(b"ETK_Request").unwrap() };
-    let vAdviseRealData: Symbol<EtkAdviseRealDataFunc> = unsafe { dll.get(b"ETK_AdviseRealData").unwrap() };
-    let vUnadviseRealData: Symbol<EtkUnadviseRealDataFunc> = unsafe { dll.get(b"ETK_UnadviseRealData").unwrap() };
-    let vUnadviseWindow: Symbol<EtkUnadviseWindowFunc> = unsafe { dll.get(b"ETK_UnadviseWindow").unwrap() };
-    let vGetAccountListCount: Symbol<EtkGetAccountListCountFunc> = unsafe { dll.get(b"ETK_GetAccountListCount").unwrap() };
-    let vGetAccountList: Symbol<EtkGetAccountListFunc> = unsafe { dll.get(b"ETK_GetAccountList").unwrap() };
-    let vGetAccountName: Symbol<EtkGetAccountNameFunc> = unsafe { dll.get(b"ETK_GetAccountName").unwrap() };
-    let vGetAcctDetailName: Symbol<EtkGetAccountDetailNameFunc> = unsafe { dll.get(b"ETK_GetAcctDetailName").unwrap() };
-    let vGetAcctNickname: Symbol<EtkGetAccountNickNameFunc> = unsafe { dll.get(b"ETK_GetAcctNickname").unwrap() };
-    let vGetServerName: Symbol<EtkGetServerNameFunc> = unsafe { dll.get(b"ETK_GetServerName").unwrap() };
-    let vGetLastError: Symbol<EtkGetLastErrorFunc> = unsafe { dll.get(b"ETK_GetLastError").unwrap() };
-    let vGetErrorMessage: Symbol<EtkGetErrorMessageFunc> = unsafe { dll.get(b"ETK_GetErrorMessage").unwrap() };
-    let vGetTRCountPerSec: Symbol<EtkGetTRCountPerSecFunc> = unsafe { dll.get(b"ETK_GetTRCountPerSec").unwrap() };
-    let vGetTRCountLimit: Symbol<EtkGetTRCountLimitFunc> = unsafe { dll.get(b"ETK_GetTRCountLimit").unwrap() };
-    let vGetTRCountRequest: Symbol<EtkGetTRCountRequestFunc> = unsafe { dll.get(b"ETK_GetTRCountRequest").unwrap() };
-    let vReleaseRequestData: Symbol<EtkReleaseRequestDataFunc> = unsafe { dll.get(b"ETK_ReleaseRequestData").unwrap() };
-    let vReleaseMessageData: Symbol<EtkReleaseMessageDataFunc> = unsafe { dll.get(b"ETK_ReleaseMessageData").unwrap() };
-    let vDecompress: Symbol<EtkDecompressFunc> = unsafe { dll.get(b"ETK_Decompress").unwrap() };
-
-    XingDllWrapper {
-        etkConnect: unsafe { vConnect.into_raw() },
-        etkIsConnected: unsafe { vIsConnected.into_raw() },
-        etkDisconnect: unsafe { vDisconnect.into_raw() },
-        etkLogin: unsafe { vLogin.into_raw() },
-        etkLogout: unsafe { vLogout.into_raw() },
-        etkRequest: unsafe { vRequest.into_raw() },
-        etkAdviseRealData: unsafe { vAdviseRealData.into_raw() },
-        etkUnadviseRealData: unsafe { vUnadviseRealData.into_raw() },
-        etkUnadviseWindow: unsafe { vUnadviseWindow.into_raw() },
-        etkGetAccountListCount: unsafe { vGetAccountListCount.into_raw() },
-        etkGetAccountList: unsafe { vGetAccountList.into_raw() },
-        etkGetAccountName: unsafe { vGetAccountName.into_raw() },
-        etkGetAcctDetailName: unsafe { vGetAcctDetailName.into_raw() },
-        etkGetAcctNickname: unsafe { vGetAcctNickname.into_raw() },
-        etkGetServerName: unsafe { vGetServerName.into_raw() },
-        etkGetLastError: unsafe { vGetLastError.into_raw() },
-        etkGetErrorMessage: unsafe { vGetErrorMessage.into_raw() },
-        etkGetTRCountPerSec: unsafe { vGetTRCountPerSec.into_raw() },
-        etkGetTRCountLimit: unsafe { vGetTRCountLimit.into_raw() },
-        etkGetTRCountRequest: unsafe { vGetTRCountRequest.into_raw() },
-        etkReleaseRequestData: unsafe { vReleaseRequestData.into_raw() },
-        etkReleaseMessageData: unsafe { vReleaseMessageData.into_raw() },
-        etkDecompress: unsafe { vDecompress.into_raw() },
-        dll,
-        hWnd,
+    unsafe {
+        XingDllWrapper {
+            etkConnect:  dll.get::<FnConnect>(b"ETK_Connect").unwrap().into_raw() ,
+            etkIsConnected:  dll.get::<FnIsConnected>(b"ETK_IsConnected").unwrap().into_raw() ,
+            etkDisconnect:  dll.get::<FnDisconnect>(b"ETK_Disconnect").unwrap().into_raw() ,
+            etkLogin:  dll.get::<FnLogin>(b"ETK_Login").unwrap().into_raw() ,
+            etkLogout:  dll.get::<FnLogout>(b"ETK_Logout").unwrap().into_raw() ,
+            etkRequest:  dll.get::<FnRequest>(b"ETK_Request").unwrap().into_raw() ,
+            etkAdviseRealData:  dll.get::<FnAdviseRealData>(b"ETK_AdviseRealData").unwrap().into_raw() ,
+            etkUnadviseRealData:  dll.get::<FnUnadviseRealData>(b"ETK_UnadviseRealData").unwrap().into_raw() ,
+            etkUnadviseWindow:  dll.get::<FnUnadviseWindow>(b"ETK_UnadviseWindow").unwrap().into_raw() ,
+            etkGetAccountListCount:  dll.get::<FnGetAccountListCount>(b"ETK_GetAccountListCount").unwrap().into_raw() ,
+            etkGetAccountList:  dll.get::<FnGetAccountList>(b"ETK_GetAccountList").unwrap().into_raw() ,
+            etkGetAccountName:  dll.get::<FnGetAccountName>(b"ETK_GetAccountName").unwrap().into_raw() ,
+            etkGetAcctDetailName:  dll.get::<FnGetAccountDetailName>(b"ETK_GetAcctDetailName").unwrap().into_raw() ,
+            etkGetAcctNickname:  dll.get::<FnGetAccountNickName>(b"ETK_GetAcctNickname").unwrap().into_raw() ,
+            etkGetServerName:  dll.get::<FnGetServerName>(b"ETK_GetServerName").unwrap().into_raw() ,
+            etkGetLastError:  dll.get::<FnGetLastError>(b"ETK_GetLastError").unwrap().into_raw() ,
+            etkGetErrorMessage:  dll.get::<FnGetErrorMessage>(b"ETK_GetErrorMessage").unwrap().into_raw() ,
+            etkGetTRCountPerSec:  dll.get::<FnGetTRCountPerSec>(b"ETK_GetTRCountPerSec").unwrap().into_raw() ,
+            etkGetTRCountLimit:  dll.get::<FnGetTRCountLimit>(b"ETK_GetTRCountLimit").unwrap().into_raw() ,
+            etkGetTRCountRequest:  dll.get::<FnGetTRCountRequest>(b"ETK_GetTRCountRequest").unwrap().into_raw() ,
+            etkReleaseRequestData:  dll.get::<FnReleaseRequestData>(b"ETK_ReleaseRequestData").unwrap().into_raw() ,
+            etkReleaseMessageData:  dll.get::<FnReleaseMessageData>(b"ETK_ReleaseMessageData").unwrap().into_raw() ,
+            etkDecompress:  dll.get::<FnDecompress>(b"ETK_Decompress").unwrap().into_raw() ,
+            dll,
+            hWnd,
+        }
     }
 }
 
 pub struct XingDllWrapper {
-    etkConnect: RawSymbol<EtkConnectFunc>,
-    etkIsConnected: RawSymbol<EtkIsConnectedFunc>,
-    etkDisconnect: RawSymbol<EtkDisconnectFunc>,
-    etkLogin: RawSymbol<EtkLoginFunc>,
-    etkLogout: RawSymbol<EtkLogoutFunc>,
-    etkRequest: RawSymbol<EtkRequestFunc>,
-    etkAdviseRealData: RawSymbol<EtkAdviseRealDataFunc>,
-    etkUnadviseRealData: RawSymbol<EtkUnadviseRealDataFunc>,
-    etkUnadviseWindow: RawSymbol<EtkUnadviseWindowFunc>,
-    etkGetAccountListCount: RawSymbol<EtkGetAccountListCountFunc>,
-    etkGetAccountList: RawSymbol<EtkGetAccountListFunc>,
-    etkGetAccountName: RawSymbol<EtkGetAccountNameFunc>,
-    etkGetAcctDetailName: RawSymbol<EtkGetAccountDetailNameFunc>,
-    etkGetAcctNickname: RawSymbol<EtkGetAccountNickNameFunc>,
-    etkGetServerName: RawSymbol<EtkGetServerNameFunc>,
-    etkGetLastError: RawSymbol<EtkGetLastErrorFunc>,
-    etkGetErrorMessage: RawSymbol<EtkGetErrorMessageFunc>,
-    etkGetTRCountPerSec: RawSymbol<EtkGetTRCountPerSecFunc>,
-    etkGetTRCountLimit: RawSymbol<EtkGetTRCountLimitFunc>,
-    etkGetTRCountRequest: RawSymbol<EtkGetTRCountRequestFunc>,
-    etkReleaseRequestData: RawSymbol<EtkReleaseRequestDataFunc>,
-    etkReleaseMessageData: RawSymbol<EtkReleaseMessageDataFunc>,
-    etkDecompress: RawSymbol<EtkDecompressFunc>,
+    etkConnect: RawSymbol<FnConnect>,
+    etkIsConnected: RawSymbol<FnIsConnected>,
+    etkDisconnect: RawSymbol<FnDisconnect>,
+    etkLogin: RawSymbol<FnLogin>,
+    etkLogout: RawSymbol<FnLogout>,
+    etkRequest: RawSymbol<FnRequest>,
+    etkAdviseRealData: RawSymbol<FnAdviseRealData>,
+    etkUnadviseRealData: RawSymbol<FnUnadviseRealData>,
+    etkUnadviseWindow: RawSymbol<FnUnadviseWindow>,
+    etkGetAccountListCount: RawSymbol<FnGetAccountListCount>,
+    etkGetAccountList: RawSymbol<FnGetAccountList>,
+    etkGetAccountName: RawSymbol<FnGetAccountName>,
+    etkGetAcctDetailName: RawSymbol<FnGetAccountDetailName>,
+    etkGetAcctNickname: RawSymbol<FnGetAccountNickName>,
+    etkGetServerName: RawSymbol<FnGetServerName>,
+    etkGetLastError: RawSymbol<FnGetLastError>,
+    etkGetErrorMessage: RawSymbol<FnGetErrorMessage>,
+    etkGetTRCountPerSec: RawSymbol<FnGetTRCountPerSec>,
+    etkGetTRCountLimit: RawSymbol<FnGetTRCountLimit>,
+    etkGetTRCountRequest: RawSymbol<FnGetTRCountRequest>,
+    etkReleaseRequestData: RawSymbol<FnReleaseRequestData>,
+    etkReleaseMessageData: RawSymbol<FnReleaseMessageData>,
+    etkDecompress: RawSymbol<FnDecompress>,
     dll: Library,
     hWnd: HWND,
 }
@@ -342,17 +323,24 @@ impl XingDllWrapper {
         unsafe { (self.etkReleaseMessageData)(lParam as LPARAM) }
     }
 
-    pub fn Decompress(&self, 압축_원본_데이터: *const i8, 압축_데이터_길이: isize, 버퍼: *mut i8) -> isize {
+    pub fn Decompress(&self, 버퍼: *mut i8, 압축_원본_데이터: *const c_uchar, 압축_데이터_길이: c_int) -> isize {
         unsafe {
             ((self.etkDecompress)(
-                압축_원본_데이터,
+                압축_원본_데이터 as *const i8,
                 버퍼,
-                압축_데이터_길이 as c_int) as isize)
+                압축_데이터_길이) as isize)
         }
     }
 
-    pub fn 닫기(self) {
+    pub fn 메시지_윈도우_닫기(&self) {
         msg_window::메세지_윈도우_닫기(self.hWnd);
-        unsafe { self.dll.close() };
+    }
+}
+
+fn bool_rust(값: BOOL) -> bool {
+    if 값 == 0 {
+        false
+    } else {
+        true
     }
 }

@@ -2,11 +2,13 @@ use std::ffi::CStr;
 use std::mem;
 use std::os::raw::*;
 use std::sync::{Arc, Mutex};
+
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExA, DefWindowProcA, DestroyWindow, DispatchMessageA, HWND_MESSAGE, MSG, PeekMessageA, PostQuitMessage, RegisterClassA, WM_DESTROY, WM_QUIT, WM_USER, WNDCLASSA};
 
 use crate::type_c;
+use crate::xing_api;
 
 const FALSE: BOOL = 0;
 const TRUE: BOOL = 1;
@@ -51,8 +53,8 @@ pub(crate) fn 메시지_윈도우_생성() -> HWND {
         debug_assert!(atom != 0);
 
         return CreateWindowExA(0, 클래스명, 타이틀,
-                        0, 0, 0, 0, 0, HWND_MESSAGE,
-                        0, instance, std::ptr::null());
+                               0, 0, 0, 0, 0, HWND_MESSAGE,
+                               0, instance, std::ptr::null());
     }
 }
 
@@ -141,27 +143,56 @@ pub(crate) fn 메세지_윈도우_닫기(hWnd: HWND) {
 }
 
 fn OnDisconnected() {
-    // TODO : 재시작 필요
-    println!("TODO : 재시작 필요.");
+    panic!("TODO : 재접속 기능 구현.");
 }
 
 fn OnTrData(ptr_tr_data: *const type_c::TR_DATA) {
     panic!("TODO");
-
-    // let 블록명 = unsafe { CStr::from_ptr((*ptr_tr_data).BlockName.as_ptr()).to_str().unwrap() };
+    // let 블록명 = unsafe { CStr::from_ptr(ptr_tr_data.BlockName.as_ptr()).to_str().unwrap() };
+    // let mut raw데이터:[u8];
+    // let mut 길이: isize;
     //
     // // t8411, t8412, t8413 반복값은 압축되어 있음. 압축해제가 필요.
     // match 블록명 {
     //     "t8411OutBlock1" => {
+    //         let mut 버퍼: [type_c::T8411OutBlock1; 2000] = unsafe { mem::zeroed() };
     //
+    //         길이 = xing_api::singleton().Decompress(
+    //             버퍼.as_mut_ptr() as *mut i8,
+    //             ptr_tr_data.Data,
+    //             ptr_tr_data.DataLength);
+    //
+    //         assert_eq!(길이 % mem::size_of::<type_c::T8411OutBlock1>(), 0);
+    //
+    //         raw데이터 = 버퍼[0..(길이/mem::size_of::<type_c::T8411OutBlock1>())];
     //     }
     //     "t8412OutBlock1" => {
+    //         let mut 버퍼: [type_c::T8412OutBlock1; 2000] = unsafe { mem::zeroed() };
     //
+    //         길이 = xing_api::singleton().Decompress(
+    //             버퍼.as_mut_ptr() as *mut i8,
+    //             ptr_tr_data.Data,
+    //             ptr_tr_data.DataLength);
+    //
+    //         assert_eq!(길이 % mem::size_of::<type_c::T8412OutBlock1>(), 0);
+    //
+    //         raw데이터 = 버퍼[0..(길이/mem::size_of::<type_c::T8412OutBlock1>())];
     //     }
     //     "t8413OutBlock1" => {
+    //         let mut 버퍼: [type_c::T8413OutBlock1; 2000] = unsafe { mem::zeroed() };
+    //         길이 = xing_api::singleton().Decompress(
+    //             버퍼.as_mut_ptr() as *mut i8,
+    //             ptr_tr_data.Data,
+    //             ptr_tr_data.DataLength);
     //
+    //         assert_eq!(길이 % mem::size_of::<type_c::T8413OutBlock1>(), 0);
+    //
+    //         raw데이터 = 버퍼[0..(길이/mem::size_of::<type_c::T8413OutBlock1>())];
     //     }
-    //     _ => (),
+    //     _ => {
+    //         길이 =  ptr_tr_data.DataLength as isize;
+    //         raw데이터 = ptr_tr_data.Data.;
+    //     }
     // }
 }
 
@@ -190,16 +221,16 @@ fn OnTimeout(식별번호: i32) {
 }
 
 // fn 압축_해제(압축된_원본_데이터 mut , 버퍼 *byte, 원본_데이터_길이 int32) int {
-    // TODO
+// TODO
 
-    // 압축_해제된_데이터_길이, _, 에러_번호 := syscall.Syscall(etkDecompress, 3,
-    // uintptr(압축된_원본_데이터),
-    // uintptr(unsafe.Pointer(버퍼)),
-    // uintptr(원본_데이터_길이))
-    //
-    // if 에러_번호 != 0 {
-    // lib.New에러with출력("F압축_해제() 에러 발생. 에러 코드 : '%v'", 에러_번호)
-    // }
-    //
-    // return int(압축_해제된_데이터_길이)
+// 압축_해제된_데이터_길이, _, 에러_번호 := syscall.Syscall(etkDecompress, 3,
+// uintptr(압축된_원본_데이터),
+// uintptr(unsafe.Pointer(버퍼)),
+// uintptr(원본_데이터_길이))
+//
+// if 에러_번호 != 0 {
+// lib.New에러with출력("F압축_해제() 에러 발생. 에러 코드 : '%v'", 에러_번호)
+// }
+//
+// return int(압축_해제된_데이터_길이)
 // }

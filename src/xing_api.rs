@@ -4,43 +4,45 @@ use std::fmt;
 use std::mem;
 use std::os::raw::*;
 use std::path::PathBuf;
+use std::string;
 use std::time;
 
+use encoding::{DecoderTrap, Encoding};
+use encoding::all::WINDOWS_949;
 use libloading::{Library, Symbol};
 use libloading::os::windows::Symbol as RawSymbol;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::WM_USER;
 
 use crate::msg_window;
+use crate::type_c;
+
 
 type LPSTR = *mut c_char;
 type LPCSTR = *const c_char;
-type LPTSTR = *mut c_char;
-type LPCTSTR = *const c_char;
-type LPVOID = *mut c_void;
 type EtkConnectFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, c_int, c_int, c_int, c_int) -> BOOL;
 type EtkIsConnectedFunc = unsafe extern "stdcall" fn() -> BOOL;
 type EtkDisconnectFunc = unsafe extern "stdcall" fn() -> BOOL;
 type EtkLoginFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, LPCSTR, c_int, BOOL) -> BOOL;
 type EtkLogoutFunc = unsafe extern "stdcall" fn(HWND) -> BOOL;
-type EtkRequestFunc = unsafe extern "stdcall" fn(HWND, LPCTSTR, LPVOID, c_int, BOOL, LPCTSTR, c_int) -> c_int;
-type EtkAdviseRealDataFunc = unsafe extern "stdcall" fn(HWND, LPCTSTR, LPCTSTR, c_int) -> BOOL;
-type EtkUnadviseRealDataFunc = unsafe extern "stdcall" fn(HWND, LPCTSTR, LPCTSTR, c_int) -> BOOL;
+type EtkRequestFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int, BOOL, LPCSTR, c_int) -> c_int;
+type EtkAdviseRealDataFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int) -> BOOL;
+type EtkUnadviseRealDataFunc = unsafe extern "stdcall" fn(HWND, LPCSTR, LPCSTR, c_int) -> BOOL;
 type EtkUnadviseWindowFunc = unsafe extern "stdcall" fn(HWND) -> BOOL;
 type EtkGetAccountListCountFunc = unsafe extern "stdcall" fn() -> c_int;
 type EtkGetAccountListFunc = unsafe extern "stdcall" fn(c_int, LPSTR, c_int) -> BOOL;
-type EtkGetAccountNameFunc = unsafe extern "stdcall" fn(LPCTSTR, LPSTR, c_int) -> BOOL;
-type EtkGetAccountDetailNameFunc = unsafe extern "stdcall" fn(LPCTSTR, LPSTR, c_int) -> BOOL;
-type EtkGetAccountNickNameFunc = unsafe extern "stdcall" fn(LPCTSTR, LPSTR, c_int) -> BOOL;
-type EtkGetServerNameFunc = unsafe extern "stdcall" fn(LPTSTR);
+type EtkGetAccountNameFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
+type EtkGetAccountDetailNameFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
+type EtkGetAccountNickNameFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> BOOL;
+type EtkGetServerNameFunc = unsafe extern "stdcall" fn(LPSTR);
 type EtkGetLastErrorFunc = unsafe extern "stdcall" fn() -> c_int;
 type EtkGetErrorMessageFunc = unsafe extern "stdcall" fn(c_int, LPSTR, c_int) -> c_int;
-type EtkGetTRCountPerSecFunc = unsafe extern "stdcall" fn(LPCTSTR) -> c_int;
-type EtkGetTRCountLimitFunc = unsafe extern "stdcall" fn(LPCTSTR) -> c_int;
-type EtkGetTRCountRequestFunc = unsafe extern "stdcall" fn(LPCTSTR) -> c_int;
+type EtkGetTRCountPerSecFunc = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
+type EtkGetTRCountLimitFunc = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
+type EtkGetTRCountRequestFunc = unsafe extern "stdcall" fn(LPCSTR) -> c_int;
 type EtkReleaseRequestDataFunc = unsafe extern "stdcall" fn(c_int);
 type EtkReleaseMessageDataFunc = unsafe extern "stdcall" fn(LPARAM);
-type EtkDecompressFunc = unsafe extern "stdcall" fn(LPCTSTR, LPCTSTR, c_int) -> c_int;
+type EtkDecompressFunc = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> c_int;
 
 fn bool_rust(값: BOOL) -> bool {
     if 값 == 0 {
@@ -181,7 +183,6 @@ impl XingDllWrapper {
     pub fn IsConnected(&self) -> bool {
         bool_rust(unsafe { (self.etkIsConnected)() })
     }
-
     pub fn Disconnect(&self) -> bool {
         bool_rust(unsafe { (self.etkDisconnect)() })
     }
@@ -205,102 +206,149 @@ impl XingDllWrapper {
         bool_rust(unsafe { (self.etkLogout)(self.hWnd) })
     }
 
-    pub fn Request<T: Into<Vec<u8>>>(&self, TR코드: T, c데이터: Box<[u8]>, 길이: int,
-                                     연속_조회_여부: bool, 연속키: T, 타임아웃: time::Duration) -> int {
-        bool_rust(unsafe {
+    pub fn Request<T: Into<Vec<u8>>>(&self, TR코드: T, c데이터: &[u8], 연속_조회_여부: bool,
+                                     연속키: T, 타임아웃: time::Duration) -> isize {
+        unsafe {
             (self.etkRequest)(
                 self.hWnd,
                 CString::new(TR코드).unwrap().as_ptr(),
-                c데이터.as_ptr(),
-                길이 as c_int,
+                c데이터.as_ptr() as *const i8,
+                c데이터.len() as c_int,
                 if 연속_조회_여부 { 1 } else { 0 },
                 CString::new(연속키).unwrap().as_ptr(),
-                타임아웃.as_secs() as c_int)
+                타임아웃.as_secs() as c_int) as isize
+        }
+    }
+
+    pub fn AdviseRealData<T: Into<Vec<u8>>>(&self, TR코드: T, 전체_종목코드: T, 단위_길이: isize) -> bool {
+        bool_rust(unsafe {
+            (self.etkAdviseRealData)(
+                self.hWnd,
+                CString::new(TR코드).unwrap().as_ptr(),
+                CString::new(전체_종목코드).unwrap().as_ptr(),
+                단위_길이 as c_int)
         })
     }
 
-    pub fn AdviseRealData(&self, hwnd: HWND, str1: LPCTSTR, str2: LPCTSTR, i: c_int) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkAdviseRealDataFunc> = unsafe { self.dll.get(ETK_AdviseRealData).unwrap() };
+    pub fn UnadviseRealData<T: Into<Vec<u8>>>(&self, TR코드: T, 전체_종목코드: T, 단위_길이: isize) -> bool {
+        bool_rust(unsafe {
+            (self.etkUnadviseRealData)(
+                self.hWnd,
+                CString::new(TR코드).unwrap().as_ptr(),
+                CString::new(전체_종목코드).unwrap().as_ptr(),
+                단위_길이 as c_int)
+        })
     }
 
-    pub fn UnadviseRealData(&self, hwnd: HWND, str1: LPCTSTR, str2: LPCTSTR, i: c_int) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkUnadviseRealDataFunc> = unsafe { self.dll.get(ETK_UnadviseRealData).unwrap() };
+    pub fn UnadviseWindow(&self) -> bool { bool_rust(unsafe { (self.etkUnadviseWindow)(self.hWnd) }) }
+
+    pub fn GetAccountListCount(&self) -> usize { unsafe { (self.etkGetAccountListCount)() as usize } }
+
+    pub fn GetAccountList(&self, 인덱스: isize) -> String {
+        unsafe {
+            let mut 버퍼: [u8; 12] = mem::zeroed();
+
+            (self.etkGetAccountList)(
+                인덱스 as c_int,
+                버퍼.as_mut_ptr() as *mut i8,
+                버퍼.len() as c_int);
+
+            CString::new(버퍼).unwrap().into_string().unwrap()
+        }
     }
 
-    pub fn UnadviseWindow(&self, hwnd: HWND) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkUnadviseWindowFunc> = unsafe { self.dll.get(ETK_UnadviseWindow).unwrap() };
+    pub fn GetAccountName<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
+        unsafe {
+            let mut 버퍼: [u8; 41] = mem::zeroed();
+
+            (self.etkGetAccountName)(
+                CString::new(계좌번호).unwrap().as_ptr(),
+                버퍼.as_mut_ptr() as *mut i8,
+                버퍼.len() as c_int);
+
+            WINDOWS_949.decode(버퍼.as_slice(), DecoderTrap::Strict).unwrap()
+        }
     }
 
-    pub fn GetAccountListCount(&self) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol/**/<EtkGetAccountListCountFunc> = unsafe { self.dll.get(ETK_GetAccountListCount).unwrap() };
+    pub fn GetAcctDetailName<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
+        unsafe {
+            let mut 버퍼: [u8; 41] = mem::zeroed();
+
+            (self.etkGetAcctDetailName)(
+                CString::new(계좌번호).unwrap().as_ptr(),
+                버퍼.as_mut_ptr() as *mut i8,
+                버퍼.len() as c_int);
+
+            WINDOWS_949.decode(버퍼.as_slice(), DecoderTrap::Strict).unwrap()
+        }
+    }
+    pub fn GetAcctNickname<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
+        unsafe {
+            let mut 버퍼: [u8; 41] = mem::zeroed();
+
+            (self.etkGetAcctNickname)(
+                CString::new(계좌번호).unwrap().as_ptr(),
+                버퍼.as_mut_ptr() as *mut i8,
+                버퍼.len() as c_int);
+
+            WINDOWS_949.decode(버퍼.as_slice(), DecoderTrap::Strict).unwrap()
+        }
     }
 
-    pub fn GetAccountList(&self, i1: c_int, str: LPSTR, i2: c_int) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetAccountListFunc> = unsafe { self.dll.get(ETK_GetAccountList).unwrap() };
+    pub fn GetServerName(&self) -> String {
+        unsafe {
+            let mut 버퍼: [u8; 51] = mem::zeroed();
+
+            (self.etkGetServerName)(버퍼.as_mut_ptr() as *mut i8);
+
+            CString::new(버퍼).unwrap().into_string().unwrap()
+        }
     }
 
-    pub fn GetAccountName(&self, str1: LPCTSTR, str2: LPSTR, i: c_int) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetAccountNameFunc> = unsafe { self.dll.get(ETK_GetAccountName).unwrap() };
+    pub fn GetLastError(&self) -> isize {
+        unsafe { (self.etkGetLastError)() as isize }
     }
 
-    pub fn GetAcctDetailName(&self, str1: LPCTSTR, str2: LPSTR, i: c_int) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetAccountDetailNameFunc> = unsafe { self.dll.get(ETK_GetAcctDetailName).unwrap() };
-    }
-    pub fn GetAcctNickname(&self, str1: LPCTSTR, str2: LPSTR, i: c_int) {//-> BOOL {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetAccountNickNameFunc> = unsafe { self.dll.get(ETK_GetAcctNickname).unwrap() };
+    pub fn GetErrorMessage(&self, 에러코드: isize) -> String {
+        unsafe {
+            let mut 버퍼: [u8; 1024] = mem::zeroed();
+
+            (self.etkGetErrorMessage)(
+                에러코드 as c_int,
+                버퍼.as_mut_ptr() as *mut i8,
+                버퍼.len() as c_int);
+
+            WINDOWS_949.decode(버퍼.as_slice(), DecoderTrap::Strict).unwrap()
+        }
     }
 
-    pub fn GetServerName(&self, str: LPTSTR) {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetServerNameFunc> = unsafe { self.dll.get(ETK_GetServerName).unwrap() };
+    pub fn GetTRCountPerSec<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
+        unsafe { (self.etkGetTRCountPerSec)(CString::new(TR코드).unwrap().as_ptr()) as isize }
     }
 
-    pub fn GetLastError(&self) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetLastErrorFunc> = unsafe { self.dll.get(ETK_GetLastError).unwrap() };
+    pub fn GetTRCountLimit<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
+        unsafe { (self.etkGetTRCountLimit)(CString::new(TR코드).unwrap().as_ptr()) as isize }
     }
 
-    pub fn GetErrorMessage(&self, i1: c_int, str: LPSTR, i2: c_int) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetErrorMessageFunc> = unsafe { self.dll.get(ETK_GetErrorMessage).unwrap() };
+    pub fn GetTRCountRequest<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
+        unsafe { (self.etkGetTRCountRequest)(CString::new(TR코드).unwrap().as_ptr()) as isize }
     }
 
-    pub fn GetTRCountPerSec(&self, str: LPCTSTR) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetTRCountPerSecFunc> = unsafe { self.dll.get(ETK_GetTRCountPerSec).unwrap() };
+    pub fn ReleaseRequestData(&self, 식별번호: isize) {
+        unsafe { (self.etkReleaseRequestData)(식별번호 as c_int) }
     }
 
-    pub fn GetTRCountLimit(&self, str: LPCTSTR) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetTRCountLimitFunc> = unsafe { self.dll.get(ETK_GetTRCountLimit).unwrap() };
+    pub fn ReleaseMessageData(&self, lParam: *const type_c::REALTIME_DATA) {
+        unsafe { (self.etkReleaseMessageData)(lParam as LPARAM) }
     }
 
-    pub fn GetTRCountRequest(&self, str: LPCTSTR) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkGetTRCountRequestFunc> = unsafe { self.dll.get(ETK_GetTRCountRequest).unwrap() };
-    }
-
-    pub fn ReleaseRequestData(&self, i: c_int) {
-        panic!("TODO");
-        // let 함수: Symbol<EtkReleaseRequestDataFunc> = unsafe { self.dll.get(ETK_ReleaseRequestData).unwrap() };
-    }
-
-    pub fn ReleaseMessageData(&self, lParam: LPARAM) {
-        panic!("TODO");
-        // let 함수: Symbol<EtkReleaseMessageDataFunc> = unsafe { self.dll.get(ETK_ReleaseMessageData).unwrap() };
-    }
-
-    pub fn Decompress(&self, str1: LPCTSTR, str2: LPCTSTR, i: c_int) {//-> c_int {
-        panic!("TODO");
-        // let 함수: Symbol<EtkDecompressFunc> = unsafe { self.dll.get(ETK_Decompress).unwrap() };
+    pub fn Decompress(&self, 압축_원본_데이터: *const i8, 압축_데이터_길이: isize, 버퍼: *mut i8) -> isize {
+        unsafe {
+            ((self.etkDecompress)(
+                압축_원본_데이터,
+                버퍼,
+                압축_데이터_길이 as c_int) as isize)
+        }
     }
 
     pub fn 닫기(self) {

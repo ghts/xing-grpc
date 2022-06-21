@@ -47,7 +47,7 @@ type FnReleaseRequestData = unsafe extern "stdcall" fn(c_int);
 type FnReleaseMessageData = unsafe extern "stdcall" fn(LPARAM);
 type FnDecompress = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> c_int;
 
-pub(crate) fn 로그인_알림_채널() -> &'static (&Sender<bool>, &Receiver<bool>) {
+pub(crate) fn 로그인_알림_채널() -> (&'static Sender<bool>, &'static Receiver<bool>) {
     static mut SENDER: MaybeUninit::<Sender<bool>> = MaybeUninit::<Sender<bool>>::uninit();
     static mut RECEIVER: MaybeUninit::<Receiver<bool>> = MaybeUninit::<Receiver<bool>>::uninit();
     static ONCE: sync::Once = sync::Once::new();
@@ -59,7 +59,7 @@ pub(crate) fn 로그인_알림_채널() -> &'static (&Sender<bool>, &Receiver<bo
             RECEIVER.write(r);
         });
 
-        &(SENDER.assume_init_ref(), RECEIVER.assume_init_ref())
+        (SENDER.assume_init_ref(), RECEIVER.assume_init_ref())
     }
 }
 
@@ -332,10 +332,6 @@ impl XingDllWrapper {
                 버퍼,
                 압축_데이터_길이) as isize)
         }
-    }
-
-    pub(crate) fn 메시지_윈도우_닫기(&self) {
-        msg_window::메세지_윈도우_닫기(self.hWnd);
     }
 }
 

@@ -29,8 +29,9 @@ const RCV_MSG_DATA: WPARAM = 2;
 const RCV_SYSTEM_ERROR: WPARAM = 3;
 const RCV_RELEASE: WPARAM = 4;
 
+static mut hWndValue:HWND = 0;
 
-pub(crate) fn 메시지_윈도우_생성() -> HWND {
+pub(crate) fn 메시지_윈도우_생성() {
     unsafe {
         let instance = GetModuleHandleA(std::ptr::null());
         debug_assert!(instance != 0);
@@ -54,7 +55,7 @@ pub(crate) fn 메시지_윈도우_생성() -> HWND {
         let atom = RegisterClassA(&wc);
         debug_assert!(atom != 0);
 
-        return CreateWindowExA(0, 클래스명, 타이틀,
+        hWndValue = CreateWindowExA(0, 클래스명, 타이틀,
                                0, 0, 0, 0, 0, HWND_MESSAGE,
                                0, instance, std::ptr::null());
     }
@@ -143,7 +144,12 @@ pub(crate) fn 윈도우_메시지_처리() {
 }
 
 pub(crate) fn 메세지_윈도우_닫기(hWnd: HWND) {
-    unsafe { DestroyWindow(hWnd) };
+    unsafe {
+        if hWndValue != 0 {
+            DestroyWindow(hWnd);
+            hWndValue = 0;
+        }
+    }
 }
 
 fn OnDisconnected() {
@@ -204,7 +210,7 @@ fn OnTrData(ptr: *const type_c::TR_DATA) {
     let 추가_연속조회_필요 = match 추가_연속조회_필요_문자열 {
         ""|"0"|"N" =>  false,
         "1"|"Y" => true,
-        _ => panic!("예상하지 못한 값 : '{}'", 추가_연속조회_필요),
+        _ => panic!("예상하지 못한 값 : '{}'", 추가_연속조회_필요_문자열),
     };
 
     let 연속키 = match 추가_연속조회_필요 {

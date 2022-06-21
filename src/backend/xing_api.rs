@@ -9,6 +9,7 @@ use std::string;
 use std::sync;
 use std::time;
 
+use crossbeam_channel::{Receiver, Sender, bounded};
 use encoding::{DecoderTrap, Encoding};
 use encoding::all::WINDOWS_949;
 use libloading::{Library, Symbol};
@@ -16,8 +17,9 @@ use libloading::os::windows::Symbol as RawSymbol;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::WM_USER;
 
-use crate::msg_window;
-use crate::type_c;
+use crate::common::consts::서버_구분;
+use crate::backend::msg_window;
+use crate::backend::type_c;
 
 type LPSTR = *mut c_char;
 type LPCSTR = *const c_char;
@@ -45,23 +47,23 @@ type FnReleaseRequestData = unsafe extern "stdcall" fn(c_int);
 type FnReleaseMessageData = unsafe extern "stdcall" fn(LPARAM);
 type FnDecompress = unsafe extern "stdcall" fn(LPCSTR, LPSTR, c_int) -> c_int;
 
-#[derive(Debug)]
-pub enum 서버_구분 {
-    실거래,
-    모의투자,
-}
+pub(crate) fn 로그인_알림_채널() -> &'static (&Sender<bool>, &Receiver<bool>) {
+    static mut SENDER: MaybeUninit::<Sender<bool>> = MaybeUninit::<Sender<bool>>::uninit();
+    static mut RECEIVER: MaybeUninit::<Receiver<bool>> = MaybeUninit::<Receiver<bool>>::uninit();
+    static ONCE: sync::Once = sync::Once::new();
 
-impl fmt::Display for 서버_구분 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            서버_구분::실거래 => write!(f, "실거래"),
-            서버_구분::모의투자 => write!(f, "모의투자"),
-            _ => write!(f, "{:?}", self),
-        }
+    unsafe {
+        ONCE.call_once(|| {
+            let (s, r) = bounded::<bool>(1);
+            SENDER.write(s);
+            RECEIVER.write(r);
+        });
+
+        &(SENDER.assume_init_ref(), RECEIVER.assume_init_ref())
     }
 }
 
-pub fn singleton() -> &'static XingDllWrapper {
+pub(crate) fn singleton() -> &'static XingDllWrapper {
     static mut SINGLETON: MaybeUninit::<XingDllWrapper> = MaybeUninit::<XingDllWrapper>::uninit();
     static ONCE: sync::Once = sync::Once::new();
 
@@ -113,7 +115,7 @@ fn 초기화() -> XingDllWrapper {
     }
 }
 
-pub struct XingDllWrapper {
+pub(crate) struct XingDllWrapper {
     etkConnect: RawSymbol<FnConnect>,
     etkIsConnected: RawSymbol<FnIsConnected>,
     etkDisconnect: RawSymbol<FnDisconnect>,
@@ -142,7 +144,7 @@ pub struct XingDllWrapper {
 }
 
 impl XingDllWrapper {
-    pub fn Connect(&self, 서버: 서버_구분) -> bool {
+    pub(crate) fn Connect(&self, 서버: 서버_구분) -> bool {
         let 서버_이름: &str;
         let 포트_번호 = 20001;
 
@@ -161,14 +163,14 @@ impl XingDllWrapper {
         })
     }
 
-    pub fn IsConnected(&self) -> bool {
+    pub(crate) fn IsConnected(&self) -> bool {
         bool_rust(unsafe { (self.etkIsConnected)() })
     }
-    pub fn Disconnect(&self) -> bool {
+    pub(crate) fn Disconnect(&self) -> bool {
         bool_rust(unsafe { (self.etkDisconnect)() })
     }
 
-    pub fn Login<T: Into<Vec<u8>>>(&self, hwnd: HWND, strId: T, strPwd: T, strCertPwd: T) -> bool {
+    pub(crate) fn Login<T: Into<Vec<u8>>>(&self, strId: T, strPwd: T, strCertPwd: T) -> bool {
         let id = CString::new(strId).unwrap().as_ptr();
         let pwd = CString::new(strPwd).unwrap().as_ptr();
         let certPwd = CString::new(strCertPwd).unwrap().as_ptr();
@@ -183,11 +185,11 @@ impl XingDllWrapper {
         })
     }
 
-    pub fn Logout(&self) -> bool {
+    pub(crate) fn Logout(&self) -> bool {
         bool_rust(unsafe { (self.etkLogout)(self.hWnd) })
     }
 
-    pub fn Request<T: Into<Vec<u8>>>(&self, TR코드: T, c데이터: &[u8], 연속_조회_여부: bool,
+    pub(crate) fn Request<T: Into<Vec<u8>>>(&self, TR코드: T, c데이터: &[u8], 연속_조회_여부: bool,
                                      연속키: T, 타임아웃: time::Duration) -> isize {
         unsafe {
             (self.etkRequest)(
@@ -201,7 +203,7 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn AdviseRealData<T: Into<Vec<u8>>>(&self, TR코드: T, 전체_종목코드: T, 단위_길이: isize) -> bool {
+    pub(crate) fn AdviseRealData<T: Into<Vec<u8>>>(&self, TR코드: T, 전체_종목코드: T, 단위_길이: isize) -> bool {
         bool_rust(unsafe {
             (self.etkAdviseRealData)(
                 self.hWnd,
@@ -211,7 +213,7 @@ impl XingDllWrapper {
         })
     }
 
-    pub fn UnadviseRealData<T: Into<Vec<u8>>>(&self, TR코드: T, 전체_종목코드: T, 단위_길이: isize) -> bool {
+    pub(crate) fn UnadviseRealData<T: Into<Vec<u8>>>(&self, TR코드: T, 전체_종목코드: T, 단위_길이: isize) -> bool {
         bool_rust(unsafe {
             (self.etkUnadviseRealData)(
                 self.hWnd,
@@ -221,11 +223,11 @@ impl XingDllWrapper {
         })
     }
 
-    pub fn UnadviseWindow(&self) -> bool { bool_rust(unsafe { (self.etkUnadviseWindow)(self.hWnd) }) }
+    pub(crate) fn UnadviseWindow(&self) -> bool { bool_rust(unsafe { (self.etkUnadviseWindow)(self.hWnd) }) }
 
-    pub fn GetAccountListCount(&self) -> usize { unsafe { (self.etkGetAccountListCount)() as usize } }
+    pub(crate) fn GetAccountListCount(&self) -> usize { unsafe { (self.etkGetAccountListCount)() as usize } }
 
-    pub fn GetAccountList(&self, 인덱스: isize) -> String {
+    pub(crate) fn GetAccountList(&self, 인덱스: isize) -> String {
         unsafe {
             let mut 버퍼: [u8; 12] = mem::zeroed();
 
@@ -238,7 +240,7 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn GetAccountName<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
+    pub(crate) fn GetAccountName<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
         unsafe {
             let mut 버퍼: [u8; 41] = mem::zeroed();
 
@@ -251,7 +253,7 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn GetAcctDetailName<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
+    pub(crate) fn GetAcctDetailName<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
         unsafe {
             let mut 버퍼: [u8; 41] = mem::zeroed();
 
@@ -263,7 +265,7 @@ impl XingDllWrapper {
             WINDOWS_949.decode(버퍼.as_slice(), DecoderTrap::Strict).unwrap()
         }
     }
-    pub fn GetAcctNickname<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
+    pub(crate) fn GetAcctNickname<T: Into<Vec<u8>>>(&self, 계좌번호: T) -> String {
         unsafe {
             let mut 버퍼: [u8; 41] = mem::zeroed();
 
@@ -276,7 +278,7 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn GetServerName(&self) -> String {
+    pub(crate) fn GetServerName(&self) -> String {
         unsafe {
             let mut 버퍼: [u8; 51] = mem::zeroed();
 
@@ -286,11 +288,11 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn GetLastError(&self) -> isize {
+    pub(crate) fn GetLastError(&self) -> isize {
         unsafe { (self.etkGetLastError)() as isize }
     }
 
-    pub fn GetErrorMessage(&self, 에러코드: isize) -> String {
+    pub(crate) fn GetErrorMessage(&self, 에러코드: isize) -> String {
         unsafe {
             let mut 버퍼: [u8; 1024] = mem::zeroed();
 
@@ -303,27 +305,27 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn GetTRCountPerSec<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
+    pub(crate) fn GetTRCountPerSec<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
         unsafe { (self.etkGetTRCountPerSec)(CString::new(TR코드).unwrap().as_ptr()) as isize }
     }
 
-    pub fn GetTRCountLimit<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
+    pub(crate) fn GetTRCountLimit<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
         unsafe { (self.etkGetTRCountLimit)(CString::new(TR코드).unwrap().as_ptr()) as isize }
     }
 
-    pub fn GetTRCountRequest<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
+    pub(crate) fn GetTRCountRequest<T: Into<Vec<u8>>>(&self, TR코드: T) -> isize {
         unsafe { (self.etkGetTRCountRequest)(CString::new(TR코드).unwrap().as_ptr()) as isize }
     }
 
-    pub fn ReleaseRequestData(&self, 식별번호: isize) {
+    pub(crate) fn ReleaseRequestData(&self, 식별번호: i32) {
         unsafe { (self.etkReleaseRequestData)(식별번호 as c_int) }
     }
 
-    pub fn ReleaseMessageData(&self, lParam: *const type_c::REALTIME_DATA) {
+    pub(crate) fn ReleaseMessageData(&self, lParam: *const type_c::REALTIME_DATA) {
         unsafe { (self.etkReleaseMessageData)(lParam as LPARAM) }
     }
 
-    pub fn Decompress(&self, 버퍼: *mut i8, 압축_원본_데이터: *const c_uchar, 압축_데이터_길이: c_int) -> isize {
+    pub(crate) fn Decompress(&self, 버퍼: *mut i8, 압축_원본_데이터: *const c_uchar, 압축_데이터_길이: c_int) -> isize {
         unsafe {
             ((self.etkDecompress)(
                 압축_원본_데이터 as *const i8,
@@ -332,7 +334,7 @@ impl XingDllWrapper {
         }
     }
 
-    pub fn 메시지_윈도우_닫기(&self) {
+    pub(crate) fn 메시지_윈도우_닫기(&self) {
         msg_window::메세지_윈도우_닫기(self.hWnd);
     }
 }

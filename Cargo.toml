@@ -9,8 +9,9 @@ edition = "2021"
 target = "i686-pc-windows-msvc"
 
 [dependencies]
-libloading = "0.7"
+crossbeam-channel = "0.5"
 encoding = "0.2"
+libloading = "0.7"
 
 [dependencies.windows-sys]
 version = "0.36.1"

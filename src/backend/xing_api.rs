@@ -15,7 +15,7 @@ use encoding::all::WINDOWS_949;
 use libloading::{Library, Symbol};
 use libloading::os::windows::Symbol as RawSymbol;
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::UI::WindowsAndMessaging::WM_USER;
+use windows_sys::Win32::UI::WindowsAndMessaging::{WM_USER,DestroyWindow};
 
 use crate::common::consts::서버_구분;
 use crate::backend::msg_window;
@@ -332,6 +332,10 @@ impl XingDllWrapper {
                 버퍼,
                 압축_데이터_길이) as isize)
         }
+    }
+
+    pub(crate) fn 메시지_윈도우_닫기(&self) {
+        unsafe { DestroyWindow(self.hWnd); }
     }
 }
 

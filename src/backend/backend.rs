@@ -3,7 +3,7 @@ use crossbeam_channel::select;
 
 use crate::backend::msg_window;
 use crate::backend::xing_api;
-use crate::common::types::{I질의값, S백엔드_인수};
+use crate::common::types::{S질의, S백엔드_인수};
 
 pub(crate) fn 실행(인수: S백엔드_인수) {
     if !로그인() {
@@ -16,9 +16,9 @@ pub(crate) fn 실행(인수: S백엔드_인수) {
 
     loop {
         select! {
-            recv(r질의) -> 질의값 => 질의_처리(질의값),
+            recv(r질의) -> 질의 => 질의_처리(질의.unwrap()),
             recv(r종료) -> _ => {
-                msg_window::메세지_윈도우_닫기();
+                xing_api::singleton().메시지_윈도우_닫기();
                 return;
             }
             default => msg_window::윈도우_메시지_처리(),
@@ -43,6 +43,6 @@ fn 로그인() -> bool {
     r.recv().unwrap()
 }
 
-fn 질의_처리(질의값: dyn I질의값) {
+fn 질의_처리(질의값: S질의) {
     panic!("TODO");
 }

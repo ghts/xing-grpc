@@ -4,12 +4,12 @@ mod backend;
 use std::{process, time, thread};
 use crossbeam_channel::{bounded, Receiver, Sender};
 
-use crate::common::types::{S백엔드_인수, I질의값};
+use crate::common::types::{S백엔드_인수, S질의};
 use crate::backend::backend::실행 as backend_실행;
 
 #[allow(non_ascii_idents, dead_code, unused_variables)]
 fn main() {
-    let (s질의, r질의) = bounded::<I질의값>(100);
+    let (s질의, r질의) = bounded::<S질의>(100);
     let (s종료, r종료) = bounded::<()>(100);
     let 백엔드_인수 = S백엔드_인수{ r질의, r종료 };
 

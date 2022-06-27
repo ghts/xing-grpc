@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 use std::mem;
 use std::os::raw::*;
-use std::sync::{Arc, Mutex};
+use std::ptr::copy_nonoverlapping;
 
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
@@ -29,9 +29,9 @@ const RCV_MSG_DATA: WPARAM = 2;
 const RCV_SYSTEM_ERROR: WPARAM = 3;
 const RCV_RELEASE: WPARAM = 4;
 
-static mut hWndValue:HWND = 0;
+// static mut hWndValue:HWND = 0;
 
-pub(crate) fn 메시지_윈도우_생성() {
+pub(crate) fn 메시지_윈도우_생성() -> HWND {
     unsafe {
         let instance = GetModuleHandleA(std::ptr::null());
         debug_assert!(instance != 0);
@@ -55,9 +55,9 @@ pub(crate) fn 메시지_윈도우_생성() {
         let atom = RegisterClassA(&wc);
         debug_assert!(atom != 0);
 
-        hWndValue = CreateWindowExA(0, 클래스명, 타이틀,
+        CreateWindowExA(0, 클래스명, 타이틀,
                                0, 0, 0, 0, 0, HWND_MESSAGE,
-                               0, instance, std::ptr::null());
+                               0, instance, std::ptr::null())
     }
 }
 
@@ -143,69 +143,58 @@ pub(crate) fn 윈도우_메시지_처리() {
     }
 }
 
-pub(crate) fn 메세지_윈도우_닫기(hWnd: HWND) {
-    unsafe {
-        if hWndValue != 0 {
-            DestroyWindow(hWnd);
-            hWndValue = 0;
-        }
-    }
-}
+// pub(crate) fn 메세지_윈도우_닫기() {
+//     unsafe {
+//         if hWndValue != 0 {
+//             DestroyWindow(hWndValue);
+//             hWndValue = 0;
+//         }
+//     }
+// }
 
 fn OnDisconnected() {
     panic!("TODO : 재접속 기능 구현.");
 }
 
 fn OnTrData(ptr: *const type_c::TR_DATA) {
-    let TR코드 = unsafe { CStr::from_ptr(ptr.TrCode.as_ptr()).to_str().unwrap() };
-    let 블록명 = unsafe { CStr::from_ptr(ptr.BlockName.as_ptr()).to_str().unwrap() };
-    let mut raw데이터:[u8];
-    let mut 길이: isize;
+    let TR코드 = unsafe { CStr::from_ptr((*ptr).TrCode.as_ptr()).to_str().unwrap() };
+    let 블록명 = unsafe { CStr::from_ptr((*ptr).BlockName.as_ptr()).to_str().unwrap() };
+    let mut raw데이터:Vec<u8>;
+    let mut 길이: usize;
 
     // t8411, t8412, t8413 반복값은 압축되어 있음. 압축해제가 필요.
     match 블록명 {
-        "t8411OutBlock1" => {
-            let mut 버퍼: [type_c::T8411OutBlock1; 2000] = unsafe { mem::zeroed() };
+        "t8411OutBlock1"|"t8412OutBlock1"|"t8413OutBlock1" => {
+            let 단위_길이 = match 블록명 {
+                "t8411OutBlock1" => consts::SizeT8411OutBlock1,
+                "t8412OutBlock1" => consts::SizeT8412OutBlock1,
+                "t8413OutBlock1" => consts::SizeT8413OutBlock1,
+                _ => panic!("예상하지 못한 경우"),
+            };
 
-            길이 = xing_api::singleton().Decompress(
-                버퍼.as_mut_ptr() as *mut i8,
-                ptr.Data,
-                ptr.DataLength);
+            raw데이터 = Vec::<u8>::with_capacity(단위_길이*2000);
 
-            assert_eq!(길이 % mem::size_of::<type_c::T8411OutBlock1>(), 0);
-
-            raw데이터 = 버퍼[0..(길이/mem::size_of::<type_c::T8411OutBlock1>())];
-        }
-        "t8412OutBlock1" => {
-            let mut 버퍼: [type_c::T8412OutBlock1; 2000] = unsafe { mem::zeroed() };
-
-            길이 = xing_api::singleton().Decompress(
-                버퍼.as_mut_ptr() as *mut i8,
-                ptr.Data,
-                ptr.DataLength);
-
-            assert_eq!(길이 % mem::size_of::<type_c::T8412OutBlock1>(), 0);
-
-            raw데이터 = 버퍼[0..(길이/mem::size_of::<type_c::T8412OutBlock1>())];
-        }
-        "t8413OutBlock1" => {
-            let mut 버퍼: [type_c::T8413OutBlock1; 2000] = unsafe { mem::zeroed() };
-            길이 = xing_api::singleton().Decompress(
-                버퍼.as_mut_ptr() as *mut i8,
-                ptr.Data,
-                ptr.DataLength);
-
-            assert_eq!(길이 % mem::size_of::<type_c::T8413OutBlock1>(), 0);
-
-            raw데이터 = 버퍼[0..(길이/mem::size_of::<type_c::T8413OutBlock1>())];
+            unsafe {
+                길이 = xing_api::singleton().Decompress(
+                    raw데이터.as_mut_ptr() as *mut i8,
+                    (*ptr).Data,
+                    (*ptr).DataLength) as usize;
+                assert_eq!(길이 % 단위_길이, 0);
+                raw데이터.set_len(길이);
+            }
         }
         _ => {
-            길이 =  ptr.DataLength as isize;
-            raw데이터 = ptr.Data;
+            unsafe {
+                // 메모리 안전성을 위해서 복사해서 사용. 복사한 데이터는 Rust가 알아서 관리해 줄테니까.
+                길이 = (*ptr).DataLength as usize;
+                raw데이터 = Vec::<u8>::with_capacity(길이);
+                copy_nonoverlapping((*ptr).Data, raw데이터.as_mut_ptr(), 길이);
+                raw데이터.set_len(길이);
+            }
         }
     }
 
-    let 추가_연속조회_필요_문자열 = unsafe { CStr::from_ptr(ptr.Cont.as_ptr()).to_str().unwrap() };
+    let 추가_연속조회_필요_문자열 = unsafe { CStr::from_ptr((*ptr).Cont.as_ptr()).to_str().unwrap() };
 
     let 추가_연속조회_필요 = match 추가_연속조회_필요_문자열 {
         ""|"0"|"N" =>  false,
@@ -213,10 +202,15 @@ fn OnTrData(ptr: *const type_c::TR_DATA) {
         _ => panic!("예상하지 못한 값 : '{}'", 추가_연속조회_필요_문자열),
     };
 
-    let 연속키 = match 추가_연속조회_필요 {
-        true => unsafe { CStr::from_ptr(ptr.ContKey.as_ptr()).to_str().unwrap().trim();  },
-        _ => "",
-    };
+    let 연속키: &str;
+
+    if 추가_연속조회_필요 {
+        unsafe {
+            연속키 = String::from(CStr::from_ptr((*ptr).ContKey.as_ptr()).to_str().unwrap()).replace(" ", "").as_str();
+        }
+    } else {
+        연속키 = "";
+    }
 
     panic!("TODO")
 

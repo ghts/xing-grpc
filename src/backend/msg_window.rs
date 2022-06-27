@@ -206,7 +206,7 @@ fn OnTrData(ptr: *const type_c::TR_DATA) {
 
     if 추가_연속조회_필요 {
         unsafe {
-            연속키 = String::from(CStr::from_ptr((*ptr).ContKey.as_ptr()).to_str().unwrap()).replace(" ", "").as_str();
+            연속키 = CStr::from_ptr((*ptr).ContKey.as_ptr()).to_str().unwrap().to_owned().replace(" ", "").as_str();
         }
     } else {
         연속키 = "";
